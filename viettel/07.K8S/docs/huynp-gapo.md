@@ -75,6 +75,8 @@ comment các dòng:
     #metadata:
     #  name: echoserver
     #  namespace: echoserver
+Lưu ý: dòng "namespace: echoserver" xuất hiện nhiều lần. 
+
 chạy file:
 
     # kubectl apply -f ./echo.kube.yaml
@@ -166,18 +168,17 @@ Cấu hình file config haproxy
 paste vào
 
     defaults
-    mode http
-    timeout client 10s
-    timeout connect 5s
-    timeout server 10s
-    timeout http-request 10s
+        mode tcp
 
-    frontend myfrontend
-      bind *:500
-      default_backend myservers
+    frontend db
+        bind *:443
+        default_backend databases
 
-    backend myservers
-      server server1 192.168.39.140:31143
+    backend databases
+        option forwardfor
+        server db1 192.168.39.140:31143
+Lưu ý: haproxy phải chạy layer 4 và cài option X-Forward-for. Tham khảo: getambassador.io/docs/edge-stack/latest/topics/running/host-crd
+
 Cấu hình file /etc/hosts
 
     # vim /etc/hosts
@@ -187,14 +188,8 @@ Cấu hình file /etc/hosts
     # systemctl restart haproxy
     # systemctl enable hapropxy
     # bash
-<h1 style="color:orange">5. Vướng mắc</h1>
-Ambassador sau khi cài xong chỉ có thể curl đến https mà không thể curl đến http
+<h1 style="color:orange">5. Kiểm tra</h1>
 
+    # curl -Lki https://test.example.com:443/echo/v1.0
 ![huynp-gapo9](../img/huynp-gapo9.png)<br>
-Sau khi cài xong haproxy cho server 192.168.45.158 và trỏ đến query địa chỉ máy ảo 192.168.39.140:31143 (https) thì nhận lỗi 301 như trên mặc dù đã dùng option -k của lệnh curl<br>
-![huynp-gapo10](../img/huynp-gapo10.png)<br>
-
-Nguyên nhân: chưa thực sự hiểu cơ chế cung cấp cert của ambassador.
-
-Đã tham khảo: https://www.getambassador.io/docs/edge-stack/latest/topics/running/host-crd<br>
-https://www.getambassador.io/docs/edge-stack/latest/topics/running/listener
+----> Thành công
