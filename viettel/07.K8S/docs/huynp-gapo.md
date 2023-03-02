@@ -193,5 +193,3 @@ Cấu hình file /etc/hosts
     # curl -Lki https://test.example.com:443/echo/v1.0
 ![huynp-gapo9](../img/huynp-gapo9.png)<br>
 ----> Thành công
-
-test may moi
