@@ -1,0 +1,135 @@
+# ansible mongodb_servers --list-hosts
+# ansible -m ping all
+# ap main.yaml
+---
+- hosts: mongodb_servers
+  vars:
+    rs_name: "chatbot-rs0"
+    rs_member_01: "{{ hostvars['chatbot-mongo-01'].ansible_host }}"
+    rs_member_02: "{{ hostvars['chatbot-mongo-02'].ansible_host }}"
+    rs_member_03: "{{ hostvars['chatbot-mongo-03'].ansible_host }}"
+    rs_primary_hostname: "chatbot-mongo-01"
+    k8s_worker_ip_01: "xx.xx.xx.xx"
+    k8s_worker_ip_02: "xx.xx.xx.xx"
+    k8s_worker_ip_03: "xx.xx.xx.xx"
+  pre_tasks:
+    - debug: var=ansible_hostname
+    - debug: var=inventory_hostname
+    - debug: var=ansible_default_ipv4.address
+    - name: Insert to '/etc/hosts'
+      blockinfile:
+        path: '/etc/hosts'
+        block: |
+          {{ hostvars['chatbot-mongo-01'].ansible_host }} {{ hostvars['chatbot-mongo-01'].ansible_hostname }}
+          {{ hostvars['chatbot-mongo-02'].ansible_host }} {{ hostvars['chatbot-mongo-02'].ansible_hostname }}
+          {{ hostvars['chatbot-mongo-03'].ansible_host }} {{ hostvars['chatbot-mongo-03'].ansible_hostname }}
+    - name: Allow access from the other MongoDB nodes to this host on TCP port '27017'
+      ufw:
+        rule: allow
+        src: '{{ item }}'
+        port: '27017'
+        proto: tcp
+      loop:
+        - "{{ ufw_allowed_ip_01 }}"
+        - "{{ ufw_allowed_ip_02 }}"
+        - "{{ k8s_worker_ip_01 }}"
+        - "{{ k8s_worker_ip_02 }}"
+        - "{{ k8s_worker_ip_03 }}"
+  roles:
+    - community.mongodb.mongodb_linux
+    - { role: community.mongodb.mongodb_repository, mongodb_version: "4.4" }
+    - community.mongodb.mongodb_install
+    - role: community.mongodb.mongodb_mongod
+      bind_ip: "127.0.0.1,{{ ansible_hostname }}"
+      repl_set_name: "{{ rs_name }}"
+      openssl_keyfile_path: /etc/mongodb-keyfile      
+      openssl_keyfile_content: |                                               # generated with cmd: `openssl rand -base64 756`
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  tasks:
+    - name: Install a list of essential and required APT packages
+      apt:
+        pkg: [build-essential, gcc, libncursesw5-dev, python3, python3-dev, python3-pip, virtualenv, openjdk-8-jdk]
+        update_cache: yes
+      when: ansible_hostname == rs_primary_hostname
+
+    - name: Install 'pymongo'
+      pip:
+        name: pymongo
+      when: ansible_hostname == rs_primary_hostname
+
+    - name: Initialise MongoDB Replicaset 
+      community.mongodb.mongodb_replicaset:
+        login_database: "admin"
+        login_host: localhost
+        replica_set: "{{ rs_name }}"
+        members:
+        - host: "{{ rs_member_01 }}"
+          priority: 1
+        - host: "{{ rs_member_02 }}"
+          priority: 0.5
+        - host: "{{ rs_member_03 }}"
+          priority: 0.5
+      when: ansible_hostname == rs_primary_hostname
+      register: repl
+
+    - name: Ensure replicaset has reached a converged state
+      community.mongodb.mongodb_status:
+        replica_set: "{{ rs_name }}"
+        poll: 10
+        interval: 10
+      when: repl.changed == True
+
+    - name: Import mongodb_auth role
+      include_role:
+        name: community.mongodb.mongodb_auth
+      vars:
+        mongod_host: "127.0.0.1"
+        mongodb_admin_pwd: "{{ admin_pwd }}"
+      when: ansible_hostname == rs_primary_hostname
+
+    # Create 'longtv16' or any other read-only users if necessary
+    - name: Add 'longtv16' user to databases in a replica set, the primary server is automatically discovered and written to
+      community.mongodb.mongodb_user:
+        login_user: admin
+        login_password: "{{ admin_pwd }}"
+        database: admin
+        name: longtv16
+        password: "{{ longtv16_pwd }}"
+        replica_set: "{{ rs_name }}"
+        roles:
+          - db: fptai_v35
+            role: read
+          - db: fptai_crm
+            role: read
+        state: present
+      when:
+        - ansible_hostname == rs_primary_hostname
+
+    # Create multiple users
+    - name: Add various users to database in a replica set
+      community.mongodb.mongodb_user:
+        login_user: admin
+        login_password: "{{ admin_pwd }}"
+        database: admin
+        name: "{{ item }}"
+        password: "{{ service_pwd }}"
+        replica_set: "{{ rs_name }}"
+        roles: [{role: "readWrite", db: "fptai_v35"}]
+        state: present
+      loop: ['fptai_autest', 'fptai_api', 'fptai_bl', 'fptai_dme', 'fptai_crm', 'fptai_be', 'fptai_ws', 'export_data_user']
+      when: ansible_hostname == rs_primary_hostname
